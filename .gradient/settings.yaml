@@ -1,0 +1,4 @@
+integrations:
+  dolly-v2-12b:
+    type: dataset
+    ref: paperspace/dsi5inn7aonbmv3:latest
