@@ -899,7 +899,6 @@ def run_grounded_sam(image_path_, targets, name, split, box_threshold, text_thre
                 assert sam_checkpoint, 'sam_checkpoint is not found!'
             except: 
                 continue
-            image_pil.save(os.path.join(output_dir, f"images/input-{count}.jpg"))
 
             # draw output image
             plt.figure(figsize=(10, 10))
@@ -928,14 +927,14 @@ def run_grounded_sam(image_path_, targets, name, split, box_threshold, text_thre
             mask_img_path, _ = save_mask_data('./outputs', masks, boxes_filt, pred_phrases)
 
             temp_boxes = (np.asarray(save_boxes)).tolist()
-            count = 1
             with open(f"/notebooks/datasets/{name}/{split}/labels/input-{count}.txt", 'w') as f:
+                image_pil.save(os.path.join(output_dir, f"images/input-{count}.jpg"))
                 for k, v in zip(pred_phrases, temp_boxes):
                     # try
                     p = inflect.engine()
 
                     pos = p.ordinal(count)
-                    count += 1
+                    
                     print(f'the {pos} tag is: {str(dict_tags[k.split("(")[0]])}')
                     print(f'the value checked in targets is {k.split("(")[0]}')
                     if k.split('(')[0] in save_targs[0].split(';'):
@@ -945,8 +944,8 @@ def run_grounded_sam(image_path_, targets, name, split, box_threshold, text_thre
                         # print('val success') 
                         f.write(f'\n') 
 
-
                     else: pass
+
                     # except: pass
             mask_img = cv2.cvtColor(cv2.imread(mask_img_path), cv2.COLOR_BGR2RGB)
             tags_out = tags.strip("'[]'")
