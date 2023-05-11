@@ -1,6 +1,5 @@
-##WORKING!!!!
 ##TO FIX:
-## - youtube videos
+## - youtube videos currently repeat processing. Downgrade ultralytics?
 ##
 ##
 
@@ -91,19 +90,20 @@ sys.tracebacklimit = 0
 hf_hub_download = partial(hf_hub_download, library_name="gligen_demo")
 
 model="../datasets/dolly-v2-12b/dolly-v2-12b/"
-generate_text = pipeline(model=model, torch_dtype=torch.bfloat16, trust_remote_code=True, device_map="auto")
 config_file = 'groundingdino/config/GroundingDINO_SwinT_OGC.py'
 ckpt_repo_id = "ShilongLiu/GroundingDINO"
 ckpt_filenmae = "groundingdino_swint_ogc.pth"
 sam_checkpoint='sam_vit_h_4b8939.pth'
 device="cpu"
 
+# Load models
+generate_text = pipeline(model=model, torch_dtype=torch.bfloat16, trust_remote_code=True, device_map="auto")
+sam = build_sam(checkpoint=sam_checkpoint)
+sam.to(device=device)
 processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-large")
 blip_model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-large")
 
-sam = build_sam(checkpoint=sam_checkpoint)
-sam.to(device=device)
-
+torch.use_deterministic_algorithms(False)
 
 def make_yaml(name, *cat):
     subprocess.run(['mkdir', f'{name}'])
@@ -296,13 +296,12 @@ Please draw boxes accordingly on the sketch pad.""".format(len(boxes), len(groun
 
 
 def train(tr_name, epochs, model_type, batch_size):
-
     model_dict = {'YOLOv8n':'yolov8n', 'YOLOv8s':'yolov8s', 'YOLOv8m':'yolov8m', 'YOLOv8l':'yolov8l', 'YOLOv8x':'yolov8x'}
     model_type = model_dict[model_type]
     print(tr_name, epochs, model_type)
     model = YOLO(f"{model_type}.yaml")  # build a new model from scratch
     model = YOLO(f"{model_type}.pt")  # load a pretrained model (recommended for training)
-    
+    torch.use_deterministic_algorithms(False)
     model.train(data=f"{tr_name}/data.yaml", epochs=epochs, verbose = True, batch = batch_size, patience = 100)
     
     #     yield pd.read_csv('runs/detect/train28.csv')
@@ -497,16 +496,16 @@ def get_model(file_name):
 def on_select(evt: gr.SelectData):  # SelectData is a subclass of EventData   
     return evt.value
 def regurg(inp):
-    return os.listdir(inp)
+    return list(sorted(os.listdir(inp)))
 def regurg2(evt: gr.SelectData):  # SelectData is a subclass of EventData
-    outy = os.listdir(f'datasets/{evt.value}/train/images/')
+    outy = list(sorted(os.listdir(f'datasets/{evt.value}/train/images/')))
     lst = []
     for i in outy:
         lst.append(f'datasets/{evt.value}/train/images/'+i)
     return lst
 def regurg3(evt: gr.SelectData):
     lst =[]
-    for i in os.listdir(f'datasets/{evt.value}/valid/images/'):
+    for i in list(sorted(os.listdir(f'datasets/{evt.value}/valid/images/'))):
         lst.append(f'datasets/{evt.value}/valid/images/'+i)
     return lst
 def select_inp_type(choice):
@@ -763,7 +762,7 @@ def check_caption(caption, pred_phrases, max_tokens=100, model="../datasets/doll
     caption = str(reply).split(':')[-1].strip()
     return caption
 
-def run_grounded_sam(image_path_, targets, name, split, box_threshold, text_threshold, iou_threshold, area_threshold):
+def run_aug_grounded_sam(image_path_, targets, name, split, box_threshold, text_threshold, iou_threshold, area_threshold, progress = gr.Progress()):
     output_dir=f"datasets/{name}/{split}/"
     train_dir = f"datasets/{name}/train/"
     valid_dir = f"datasets/{name}/valid/"
@@ -797,9 +796,8 @@ def run_grounded_sam(image_path_, targets, name, split, box_threshold, text_thre
     if not os.path.isfile(f'{name}/data.yaml'):    
             make_yaml_auto(name, save_targs)
     count = len(os.listdir(f"datasets/{name}/{split}/images/"))
-    # load image
-    
-    for impath in image_path_:
+
+    for impath in progress.tqdm(image_path_, desc = 'Images Processed'):
         # try:
         if 1+1 == 2:
             split = save_split
@@ -814,8 +812,6 @@ def run_grounded_sam(image_path_, targets, name, split, box_threshold, text_thre
             # visualize raw image
 
             caption = generate_caption(image_pil)
-            # Currently ", " is better for detecting single tags
-            # while ". " is a little worse in some case
             splity = ','
             with open(f"/notebooks/{name}/data.yaml", 'r') as stream:
                 data_loaded = yaml.safe_load(stream)
@@ -830,17 +826,13 @@ def run_grounded_sam(image_path_, targets, name, split, box_threshold, text_thre
                 )
             except:
                 continue
-            # print('working test 1')
             size = image_pil.size
 
             # initialize SAM
             predictor = SamPredictor(sam)
             image = np.array(image_pil)
-            # image = center_crop(image)
-            # image = np.array(Image.open(image_path))
-            # print('working test 2')
+
             predictor.set_image(image)
-            # print('working test 3')
 
             H, W = size[1], size[0]
             for i in range(boxes_filt.size(0)):
@@ -927,25 +919,27 @@ def run_grounded_sam(image_path_, targets, name, split, box_threshold, text_thre
             mask_img_path, _ = save_mask_data('./outputs', masks, boxes_filt, pred_phrases)
 
             temp_boxes = (np.asarray(save_boxes)).tolist()
-            with open(f"/notebooks/datasets/{name}/{split}/labels/input-{count}.txt", 'w') as f:
-                image_pil.save(os.path.join(output_dir, f"images/input-{count}.jpg"))
-                for k, v in zip(pred_phrases, temp_boxes):
-                    # try
-                    p = inflect.engine()
+            print(f'Saving labels and image for input-{count}...')
+            try:
+                with open(f"/notebooks/datasets/{name}/{split}/labels/input-{count}.txt", 'w') as f:
+                    image_pil.save(os.path.join(output_dir, f"images/input-{count}.jpg"))
+                    inflectcount = 1
+                    for k, v in zip(lst, temp_boxes):
+                        # try
+                        p = inflect.engine()
+                        pos = p.ordinal(inflectcount)
+                        inflectcount += 1
+                        print(f'the {pos} tag is: {str(dict_tags[k.split("(")[0]])}')
+                        print(f'the value checked in targets is {k.split("(")[0]}')
+                        if k.split('(')[0] in save_targs[0].split(';'):
+                            f.write(f'{str(dict_tags[k.split("(")[0]])} ')
+                            # print('key success')
+                            f.write(" ".join(map(make_str, v)).strip("'[]'"))
+                            # print('val success') 
+                            f.write(f'\n') 
 
-                    pos = p.ordinal(count)
-                    
-                    print(f'the {pos} tag is: {str(dict_tags[k.split("(")[0]])}')
-                    print(f'the value checked in targets is {k.split("(")[0]}')
-                    if k.split('(')[0] in save_targs[0].split(';'):
-                        f.write(f'{str(dict_tags[k.split("(")[0]])} ')
-                        # print('key success')
-                        f.write(" ".join(map(make_str, v)).strip("'[]'"))
-                        # print('val success') 
-                        f.write(f'\n') 
-
-                    else: pass
-
+                        else: pass
+            except: continue
                     # except: pass
             mask_img = cv2.cvtColor(cv2.imread(mask_img_path), cv2.COLOR_BGR2RGB)
             tags_out = tags.strip("'[]'")
@@ -983,7 +977,7 @@ def show():
 
 def refresh_auto_gal_fun(name_dataset, split_auto):
     lst = []
-    for i in os.listdir(f'datasets/{name_dataset}/{split_auto}/labeled_imgs/'):
+    for i in list(sorted(os.listdir(f'datasets/{name_dataset}/{split_auto}/labeled_imgs/'))):
         if i.split('.')[1]!='txt':
             lst.append(f'datasets/{name_dataset}/{split_auto}/labeled_imgs/{i}')
     return lst
@@ -1053,7 +1047,7 @@ with Blocks(
     """
     description_train = """
     <p style="text-align: center;">
-        <span style="font-size: 28px; font-weight: bold;">Ultralytics YOLOv8: Train a custom model on your automatically labeled data</span>
+        <span style="font-size: 28px; font-weight: bold;">Ultralytics YOLOv8 Model Training</span>
         <br>
         Now that we have labeled our images, we can train our model! \n
         Select the model type, batch size, and the number of epochs you would like to train for, and then click the Generate button to run training.  
@@ -1061,9 +1055,9 @@ with Blocks(
     """
     description_inf = """
     <p style="text-align: center;">
-        <span style="font-size: 28px; font-weight: bold;">Ultralytics YOLOv8 prediction: Generate object labels on new images</span>
+        <span style="font-size: 28px; font-weight: bold;">Ultralytics YOLOv8 Prediction</span>
         <br>
-        This tab can be used to run predictions on photos using the model we just trained. 
+        This tab can be used to run predictions on photos using the model we just trained on submitted images and videos. We can also optionally submit image and Youtube video URLs. 
     </p>
     """
     description = """
@@ -1122,7 +1116,6 @@ with Blocks(
             gr.Image('assets/logo.png').style(height = 53, width = 125, interactive = False)
     ## return to old
     with gr.Tab("Manually label Images"):
-        print('lab')
         gr.HTML(description_label)
         with gr.Row():
             with gr.Column(scale=4):
@@ -1144,7 +1137,7 @@ with Blocks(
 
                 select_upload_type = gr.Radio(label='Select upload type',choices = ['Upload bulk', 'Single uploads'], value = 'Single uploads')
                 upload_bulk = gr.File(label = 'Input images in bulk. After uploading, click "Refresh image dropdown"',file_count = 'multiple', visible = False, interactive = True)
-                select_image = gr.Dropdown(choices = None, label = 'Select image to label. The image will be removed from this list, and passed to the sketchpad on the right of the page.', visible = False)
+                select_image = gr.Dropdown(choices = None, label = 'Select image to label. The image will be removed from this list, and passed to the sketchpad on the right of the page.', visible = False, interactive = True)
                 refresh_dropdown = gr.Button('Refresh image dropdown', visible = False)
                 with gr.Accordion("Advanced Options", open=False, visible = False):
                     with gr.Column():
@@ -1196,7 +1189,6 @@ with Blocks(
             val_gallery = gr.Gallery(label = 'Validation images', value = None).style(grid=[10], height="auto")
             
     with gr.Tab('Train YOLOv8'):
-        print('train')
         gr.HTML(description_train)
         with gr.Row():
             with gr.Column():
@@ -1222,7 +1214,6 @@ with Blocks(
             gr.Image('assets/logo.png').style(height = 53, width = 125, interactive = False)
                         
     with gr.Tab('Inference with YOLOv8'):
-        print('inf')
         gr.HTML(description_inf)
         with gr.Row():
             with gr.Column():
@@ -1392,7 +1383,7 @@ with Blocks(
     select_image.select(fix, inputs = None, outputs = [out_gen_3, out_gen_4])
     select_inp.select(select_inp_type, inputs = select_inp, outputs = [img, vid, out_inf_img, out_inf_vid])
     ## new additions
-    run_button.click(fn=run_grounded_sam, inputs=[
+    run_button.click(fn=run_aug_grounded_sam, inputs=[
                         input_image, targets, name_dataset, split_auto, box_threshold, text_threshold, iou_threshold, area_threshold], 
                         outputs=[gallery_auto, mask_gallery_auto, image_caption, identified_labels])
     gallery_auto.select(fn = show, inputs = None, outputs = [image_caption, identified_labels, mask_gallery_auto])

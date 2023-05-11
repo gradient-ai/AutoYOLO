@@ -23,6 +23,6 @@ exif
 textblob
 einops
 omegaconf
-ultralytics
+ultralytics==8.0.95
 clip
 inflect
